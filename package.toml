@@ -1,1 +1,3 @@
 name = "wren-test"
+
+[[dependencies]]
