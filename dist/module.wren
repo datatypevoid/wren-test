@@ -28,6 +28,7 @@ class Expectation {
    */
   message { _message }
 }
+
 /**
  * Represents a skipped test or suite and implements the same basic interface as
  * `Runnable`.
@@ -463,438 +464,6 @@ class Stub {
   }
 }
 
-class NumMatchers is FiberMatchers {
-  /**
-   * Create a new `Matcher` object for a value.
-   *
-   * @param {*} value The value to be matched on.
-   */
-  construct new (value) {
-    super(value)
-  }
-
-  /**
-   * Assert that the value is greater than some value. This matcher works on any
-   * class that defines the `>` operator.
-   */
-  toBeGreaterThan (other) {
-    report_(value > other, "Expected " + value.toString + " to be greater " +
-        "than " + other.toString)
-  }
-
-  /**
-   * Assert that the value is less than some value. This matcher works on any
-   * class that defines the `<` operator.
-   */
-  toBeLessThan (other) {
-    report_(value < other, "Expected " + value.toString + " to be less than " +
-        other.toString)
-  }
-
-  /**
-   * Assert that the value is between two values. This matches works on any
-   * class that defines the `<` and `>` operator.
-   */
-  toBeBetween (min, max) {
-    var message = "Expected " + value.toString + " to be between " +
-        min.toString + " and " + max.toString
-    report_(value > min && value < max, message)
-  }
-}
-
-/**
- * Run a test block.
- */
-class Runnable {
-  /**
-   * Create a new runnable test object. Either a Fiber or Fn can be given as the
-   * runnable object.
-   *
-   * @param {String} title Name of the test.
-   * @param {Sequence[Fn|Fiber]} beforeEaches List of functions or fibers that
-   *                                          should be called before the main
-   *                                          test block is run.
-   * @param {Sequence[Fn|Fiber]} afterEaches List of functions or fibers that
-   *                                         should be called after the main
-   *                                         test block is run.
-   * @param {Fiber|Fn} body Fiber or function that represents the test to run.
-   */
-  construct new (title, beforeEaches, afterEaches, fn) {
-    _title = title
-
-    _beforeEaches = beforeEaches
-    _afterEaches = afterEaches
-
-    _expectations = []
-
-    // Wrap bare functions in Fibers.
-    if (fn.type != Fiber) {
-      fn = Fiber.new(fn)
-    }
-
-    _fn = fn
-  }
-
-  /**
-   * @return {Num} Elapsed time for this test, in milliseconds, including
-   * running all defined `beforeEach` and `afterEach` methods.
-   */
-  duration { (_duration * 1000).ceil }
-
-  /**
-   * @return {String} The error string of this Runnable if an error was
-   * encountered while running this test.
-   */
-  error { _fn.error }
-
-  /**
-   * @return {Sequence[Expectations]} List of `Expectation`s that were emitted
-   * by the test body.
-   */
-  expectations { _expectations }
-
-  /**
-   * @return {Bool} Whether this Runnable instance has been run.
-   */
-  hasRun { _fn.isDone }
-
-  /**
-   * Runs the test function and collects the `Expectation`s that were generated.
-   *
-   * @return {Sequence[Expectation]} List of `Expectation`s that were emitted by
-   * the test body.
-   */
-  run() {
-    var startTime = System.clock
-
-    for (fn in _beforeEaches) { fn.call() }
-
-    while (!_fn.isDone) {
-      var result = _fn.try()
-
-      // Ignore any values that were yielded that weren't an Expectation.
-      // Note: When a fiber is finished the last `yield` invocation returns
-      // `null` so it will not be added to the array.
-      if (result is Expectation) {
-        _expectations.add(result)
-      }
-    }
-
-    for (fn in _afterEaches) { fn.call() }
-
-    _duration = System.clock - startTime
-
-    return _expectations
-  }
-
-  /**
-   * @return {String} Title string of this Runnable.
-   */
-  title { _title }
-}
-
-/**
- * A test reporter that outputs the results to the console.
- */
-class ConsoleReporter is Reporter {
-  construct new() {
-    _indent = 0
-
-    // Count the different kinds of tests reported.
-    _counters = {
-      "tests": 0,
-      "passed": 0,
-      "failed": 0,
-      "errors": 0,
-      "skipped": 0
-    }
-
-    _startTime = System.clock
-  }
-
-  getCount_ (kind) { _counters[kind].toString }
-
-  count_ (kind) {
-    _counters[kind] = _counters[kind] + 1
-  }
-
-  /**
-   * Prints out a summary of the test run reported on by this instance.
-   */
-  epilogue () {
-    var duration = ((System.clock - _startTime) * 1000).ceil.toString
-
-    System.print("")
-    System.print("==== Tests Summary ====")
-
-    var result = getCount_("tests") + " tests, " + getCount_("passed") +
-      " passed, " + getCount_("failed") + " failed, " + getCount_("errors") +
-      " errors, " + getCount_("skipped") + " skipped (" + duration + " ms)"
-    print_(result, 2)
-  }
-
-  runnableSkipped (skippable) {
-    count_("skipped")
-
-    print_("- " + skippable.title, _indent + 1,
-      "\u001b[36m")
-  }
-
-  suiteStart (title) {
-    _indent = _indent + 1
-
-    print_(title)
-  }
-
-  suiteEnd (title) {
-    _indent = _indent - 1
-
-    if (_indent == 0) { System.print("") }
-  }
-
-  testStart (runnable) {
-    _indent = _indent + 1
-    count_("tests")
-  }
-
-  testEnd (runnable) {
-    _indent = _indent - 1
-  }
-
-  testPassed (runnable) {
-    count_("passed")
-
-    print_(Symbols["ok"] + " \u001b[90mshould " + runnable.title, _indent,
-      "\u001b[32m")
-  }
-
-  testFailed (runnable) {
-    count_("failed")
-
-    print_(Symbols["err"] + " \u001b[90mshould " + runnable.title, _indent,
-      "\u001b[31m")
-
-    var failedExpectations = runnable.expectations.where { |e| !e.passed }
-
-    for (expectation in failedExpectations) {
-      print_(expectation.message, _indent + 1, "\u001b[31m")
-    }
-  }
-
-  testError (runnable) {
-    count_("errors")
-
-    print_(Symbols["err"] + " \u001b[90mshould " + runnable.title)
-    print_("Error: " + runnable.error, _indent + 1, "\u001b[31m")
-  }
-
-  print_ (string) {
-    print_(string, _indent)
-  }
-
-  print_ (string, indent) {
-    print_(string, indent, "")
-  }
-
-  print_ (string, indent, color) {
-    var result = ""
-
-    for (i in 2...(indent * 2)) {
-      result = result + " "
-    }
-
-    System.print(color + result + string + "\u001b[0m")
-  }
-}
-
-var Symbols = {
-  "ok": "✓",
-  "err": "✖"
-}
-/**
- * Defines the full interface for a test reporter.
- */
-class Reporter {
-  /**
-   * Called when a test run is entirely finished and can be used to print a test
-   * summary for instance.
-   */
-  epilogue () {}
-
-  /**
-   * Called when a runnable is skipped.
-   *
-   * @param {Skippable} skippable Skippable object that represents the runnable
-   *                              that was skipped.
-   */
-  runnableSkipped (skippable) {}
-
-  /**
-   * Called when a suite run is started.
-   *
-   * @param {String} title Name of the suite that has been started.
-   */
-  suiteStart (title) {}
-
-  /**
-   * Called when a suite run is finished.
-   *
-   * @param {String} title Name of the suite that has been finished.
-   */
-  suiteEnd (title) {}
-
-  /**
-   * Called when a test is started.
-   *
-   * @param {Runnable} runnable Runnable object that is about to be run.
-   */
-  testStart (runnable) {}
-
-  /**
-   * Called when a test passed.
-   *
-   * @param {Runnable} runnable Runnable object that was successful.
-   */
-  testPassed (runnable) {}
-
-  /**
-   * Called when a test failed.
-   *
-   * @param {Runnable} runnable Runnable object that failed.
-   */
-  testFailed (runnable) {}
-
-  /**
-   * Called when a test encounters an error.
-   *
-   * @param {Runnable} runnable Runnable object that encountered an error.
-   */
-  testError (runnable) {}
-
-  /**
-   * Called when a test is finished.
-   *
-   * @param {Runnable} runnable Runnable object that just finished.
-   */
-  testEnd (runnable) {}
-}
-/**
- * A class of matchers for making assertions about ranges.
- */
-class RangeMatchers is NumMatchers {
-  /**
-   * Create a new `Matcher` object for a value.
-   *
-   * @param {*} value The value to be matched on.
-   */
-  construct new (value) {
-    super(value)
-  }
-
-  /**
-   * Assert that the value contains the given range.
-   *
-   * @param {Range} other The range that should be contained within the range
-   *                      represented by the value.
-   */
-  toContain (other) {
-    enforceClass_(Range)
-
-    var result = rangeIsContainedBy_(value, other)
-    var message = "Expected " + value.toString + " to contain " + other.toString
-    report_(result, message)
-  }
-
-  /**
-   * Assert that the value is contained within the given range.
-   *
-   * @param {Range} other The range that should contain this range represented
-   *                      by the value.
-   */
-  toBeContainedBy (other) {
-    enforceClass_(Range)
-
-    var result = rangeIsContainedBy_(other, value)
-    var message = "Expected " + value.toString + " to be contained by " +
-        other.toString
-    report_(result, message)
-  }
-
-  rangeIsContainedBy_ (parent, child) {
-    var parentTo = parent.isInclusive ? parent.to : (parent.to - 1)
-    var childTo = child.isInclusive ? child.to : (child.to - 1)
-
-    return (child.from >= parent.from) && (childTo <= parentTo)
-  }
-}
-
-class StubMatchers is RangeMatchers {
-  /**
-   * Create a new `Matcher` object for a value.
-   *
-   * @param {*} value The value to be matched on.
-   */
-  construct new (value) {
-    super(value)
-  }
-
-  /**
-   * Assert that this stub was called at least once.
-   */
-  toHaveBeenCalled {
-    enforceClass_(Stub)
-
-    var message = "Expected " + value.name + " to have been called"
-    report_(value.called, message)
-  }
-
-  /**
-   * Assert that this stub was called a certain number of times.
-   *
-   * @param {Num} times Number of times this stub should have been called.
-   */
-  toHaveBeenCalled (times) {
-    enforceClass_(Stub)
-
-    var message = "Expected " + value.name + " to have been called " +
-        times.toString + " times but was called " + value.calls.count.toString +
-        " times"
-    report_(value.calls.count == times, message)
-  }
-
-  /**
-   * Assert that this stub was called with the given arguments.
-   *
-   * @param {Sequence[*]} args Arguments that the stub should have been called
-   *                           with.
-   */
-  toHaveBeenCalledWith (args) {
-    enforceClass_(Stub)
-
-    for (call in value.calls) {
-      // Ignore any call lists that aren't the same size.
-      if (call.count == args.count) {
-        var i = 0
-
-        var argsEqual = call.all { |callArg|
-          i = i + 1
-          return callArg == args[i - 1]
-        }
-
-        if (argsEqual) {
-          report_(true, "")
-          return
-        }
-      }
-    }
-
-    var message = "Expected " + value.name + " to have been called with " +
-        args.toString + " but was never called. Calls were:\n    " +
-        value.calls.join("\n    ")
-    report_(false, message)
-  }
-}
-
 /**
  * A class of matchers to use for making assertions.
  */
@@ -1088,6 +657,440 @@ class FiberMatchers is BaseMatchers {
       report_(results.size == shouldYield.size, message)
     }
   }*/
+}
+
+class NumMatchers is FiberMatchers {
+  /**
+   * Create a new `Matcher` object for a value.
+   *
+   * @param {*} value The value to be matched on.
+   */
+  construct new (value) {
+    super(value)
+  }
+
+  /**
+   * Assert that the value is greater than some value. This matcher works on any
+   * class that defines the `>` operator.
+   */
+  toBeGreaterThan (other) {
+    report_(value > other, "Expected " + value.toString + " to be greater " +
+        "than " + other.toString)
+  }
+
+  /**
+   * Assert that the value is less than some value. This matcher works on any
+   * class that defines the `<` operator.
+   */
+  toBeLessThan (other) {
+    report_(value < other, "Expected " + value.toString + " to be less than " +
+        other.toString)
+  }
+
+  /**
+   * Assert that the value is between two values. This matches works on any
+   * class that defines the `<` and `>` operator.
+   */
+  toBeBetween (min, max) {
+    var message = "Expected " + value.toString + " to be between " +
+        min.toString + " and " + max.toString
+    report_(value > min && value < max, message)
+  }
+}
+
+/**
+ * Run a test block.
+ */
+class Runnable {
+  /**
+   * Create a new runnable test object. Either a Fiber or Fn can be given as the
+   * runnable object.
+   *
+   * @param {String} title Name of the test.
+   * @param {Sequence[Fn|Fiber]} beforeEaches List of functions or fibers that
+   *                                          should be called before the main
+   *                                          test block is run.
+   * @param {Sequence[Fn|Fiber]} afterEaches List of functions or fibers that
+   *                                         should be called after the main
+   *                                         test block is run.
+   * @param {Fiber|Fn} body Fiber or function that represents the test to run.
+   */
+  construct new (title, beforeEaches, afterEaches, fn) {
+    _title = title
+
+    _beforeEaches = beforeEaches
+    _afterEaches = afterEaches
+
+    _expectations = []
+
+    // Wrap bare functions in Fibers.
+    if (fn.type != Fiber) {
+      fn = Fiber.new(fn)
+    }
+
+    _fn = fn
+  }
+
+  /**
+   * @return {Num} Elapsed time for this test, in milliseconds, including
+   * running all defined `beforeEach` and `afterEach` methods.
+   */
+  duration { (_duration * 1000).ceil }
+
+  /**
+   * @return {String} The error string of this Runnable if an error was
+   * encountered while running this test.
+   */
+  error { _fn.error }
+
+  /**
+   * @return {Sequence[Expectations]} List of `Expectation`s that were emitted
+   * by the test body.
+   */
+  expectations { _expectations }
+
+  /**
+   * @return {Bool} Whether this Runnable instance has been run.
+   */
+  hasRun { _fn.isDone }
+
+  /**
+   * Runs the test function and collects the `Expectation`s that were generated.
+   *
+   * @return {Sequence[Expectation]} List of `Expectation`s that were emitted by
+   * the test body.
+   */
+  run() {
+    var startTime = System.clock
+
+    for (fn in _beforeEaches) { fn.call() }
+
+    while (!_fn.isDone) {
+      var result = _fn.try()
+
+      // Ignore any values that were yielded that weren't an Expectation.
+      // Note: When a fiber is finished the last `yield` invocation returns
+      // `null` so it will not be added to the array.
+      if (result is Expectation) {
+        _expectations.add(result)
+      }
+    }
+
+    for (fn in _afterEaches) { fn.call() }
+
+    _duration = System.clock - startTime
+
+    return _expectations
+  }
+
+  /**
+   * @return {String} Title string of this Runnable.
+   */
+  title { _title }
+}
+
+/**
+ * Defines the full interface for a test reporter.
+ */
+class Reporter {
+  /**
+   * Called when a test run is entirely finished and can be used to print a test
+   * summary for instance.
+   */
+  epilogue () {}
+
+  /**
+   * Called when a runnable is skipped.
+   *
+   * @param {Skippable} skippable Skippable object that represents the runnable
+   *                              that was skipped.
+   */
+  runnableSkipped (skippable) {}
+
+  /**
+   * Called when a suite run is started.
+   *
+   * @param {String} title Name of the suite that has been started.
+   */
+  suiteStart (title) {}
+
+  /**
+   * Called when a suite run is finished.
+   *
+   * @param {String} title Name of the suite that has been finished.
+   */
+  suiteEnd (title) {}
+
+  /**
+   * Called when a test is started.
+   *
+   * @param {Runnable} runnable Runnable object that is about to be run.
+   */
+  testStart (runnable) {}
+
+  /**
+   * Called when a test passed.
+   *
+   * @param {Runnable} runnable Runnable object that was successful.
+   */
+  testPassed (runnable) {}
+
+  /**
+   * Called when a test failed.
+   *
+   * @param {Runnable} runnable Runnable object that failed.
+   */
+  testFailed (runnable) {}
+
+  /**
+   * Called when a test encounters an error.
+   *
+   * @param {Runnable} runnable Runnable object that encountered an error.
+   */
+  testError (runnable) {}
+
+  /**
+   * Called when a test is finished.
+   *
+   * @param {Runnable} runnable Runnable object that just finished.
+   */
+  testEnd (runnable) {}
+}
+
+/**
+ * A test reporter that outputs the results to the console.
+ */
+class ConsoleReporter is Reporter {
+  construct new() {
+    _indent = 0
+
+    // Count the different kinds of tests reported.
+    _counters = {
+      "tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+
+    _startTime = System.clock
+  }
+
+  getCount_ (kind) { _counters[kind].toString }
+
+  count_ (kind) {
+    _counters[kind] = _counters[kind] + 1
+  }
+
+  /**
+   * Prints out a summary of the test run reported on by this instance.
+   */
+  epilogue () {
+    var duration = ((System.clock - _startTime) * 1000).ceil.toString
+
+    System.print("")
+    System.print("==== Tests Summary ====")
+
+    var result = getCount_("tests") + " tests, " + getCount_("passed") +
+      " passed, " + getCount_("failed") + " failed, " + getCount_("errors") +
+      " errors, " + getCount_("skipped") + " skipped (" + duration + " ms)"
+    print_(result, 2)
+  }
+
+  runnableSkipped (skippable) {
+    count_("skipped")
+
+    print_("- " + skippable.title, _indent + 1,
+      "\u001b[36m")
+  }
+
+  suiteStart (title) {
+    _indent = _indent + 1
+
+    print_(title)
+  }
+
+  suiteEnd (title) {
+    _indent = _indent - 1
+
+    if (_indent == 0) { System.print("") }
+  }
+
+  testStart (runnable) {
+    _indent = _indent + 1
+    count_("tests")
+  }
+
+  testEnd (runnable) {
+    _indent = _indent - 1
+  }
+
+  testPassed (runnable) {
+    count_("passed")
+
+    print_(Symbols["ok"] + " \u001b[90mshould " + runnable.title, _indent,
+      "\u001b[32m")
+  }
+
+  testFailed (runnable) {
+    count_("failed")
+
+    print_(Symbols["err"] + " \u001b[90mshould " + runnable.title, _indent,
+      "\u001b[31m")
+
+    var failedExpectations = runnable.expectations.where { |e| !e.passed }
+
+    for (expectation in failedExpectations) {
+      print_(expectation.message, _indent + 1, "\u001b[31m")
+    }
+  }
+
+  testError (runnable) {
+    count_("errors")
+
+    print_(Symbols["err"] + " \u001b[90mshould " + runnable.title)
+    print_("Error: " + runnable.error, _indent + 1, "\u001b[31m")
+  }
+
+  print_ (string) {
+    print_(string, _indent)
+  }
+
+  print_ (string, indent) {
+    print_(string, indent, "")
+  }
+
+  print_ (string, indent, color) {
+    var result = ""
+
+    for (i in 2...(indent * 2)) {
+      result = result + " "
+    }
+
+    System.print(color + result + string + "\u001b[0m")
+  }
+}
+
+var Symbols = {
+  "ok": "✓",
+  "err": "✖"
+}
+
+/**
+ * A class of matchers for making assertions about ranges.
+ */
+class RangeMatchers is NumMatchers {
+  /**
+   * Create a new `Matcher` object for a value.
+   *
+   * @param {*} value The value to be matched on.
+   */
+  construct new (value) {
+    super(value)
+  }
+
+  /**
+   * Assert that the value contains the given range.
+   *
+   * @param {Range} other The range that should be contained within the range
+   *                      represented by the value.
+   */
+  toContain (other) {
+    enforceClass_(Range)
+
+    var result = rangeIsContainedBy_(value, other)
+    var message = "Expected " + value.toString + " to contain " + other.toString
+    report_(result, message)
+  }
+
+  /**
+   * Assert that the value is contained within the given range.
+   *
+   * @param {Range} other The range that should contain this range represented
+   *                      by the value.
+   */
+  toBeContainedBy (other) {
+    enforceClass_(Range)
+
+    var result = rangeIsContainedBy_(other, value)
+    var message = "Expected " + value.toString + " to be contained by " +
+        other.toString
+    report_(result, message)
+  }
+
+  rangeIsContainedBy_ (parent, child) {
+    var parentTo = parent.isInclusive ? parent.to : (parent.to - 1)
+    var childTo = child.isInclusive ? child.to : (child.to - 1)
+
+    return (child.from >= parent.from) && (childTo <= parentTo)
+  }
+}
+
+class StubMatchers is RangeMatchers {
+  /**
+   * Create a new `Matcher` object for a value.
+   *
+   * @param {*} value The value to be matched on.
+   */
+  construct new (value) {
+    super(value)
+  }
+
+  /**
+   * Assert that this stub was called at least once.
+   */
+  toHaveBeenCalled {
+    enforceClass_(Stub)
+
+    var message = "Expected " + value.name + " to have been called"
+    report_(value.called, message)
+  }
+
+  /**
+   * Assert that this stub was called a certain number of times.
+   *
+   * @param {Num} times Number of times this stub should have been called.
+   */
+  toHaveBeenCalled (times) {
+    enforceClass_(Stub)
+
+    var message = "Expected " + value.name + " to have been called " +
+        times.toString + " times but was called " + value.calls.count.toString +
+        " times"
+    report_(value.calls.count == times, message)
+  }
+
+  /**
+   * Assert that this stub was called with the given arguments.
+   *
+   * @param {Sequence[*]} args Arguments that the stub should have been called
+   *                           with.
+   */
+  toHaveBeenCalledWith (args) {
+    enforceClass_(Stub)
+
+    for (call in value.calls) {
+      // Ignore any call lists that aren't the same size.
+      if (call.count == args.count) {
+        var i = 0
+
+        var argsEqual = call.all { |callArg|
+          i = i + 1
+          return callArg == args[i - 1]
+        }
+
+        if (argsEqual) {
+          report_(true, "")
+          return
+        }
+      }
+    }
+
+    var message = "Expected " + value.name + " to have been called with " +
+        args.toString + " but was never called. Calls were:\n    " +
+        value.calls.join("\n    ")
+    report_(false, message)
+  }
 }
 
 // Create top-level class so that trying to access an undefined matcher doesn't
